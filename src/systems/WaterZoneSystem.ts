@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import TerrainSystem from './TerrainSystem';
 
 /**
  * Enum representing different water zone types
@@ -37,21 +38,25 @@ export default class WaterZoneSystem {
   private scene: Phaser.Scene;
   private waterZones: Map<string, WaterZone> = new Map();
   private activeZones: WaterZone[] = [];
-  private defaultDepth: number = 180;
+  private defaultDepth: number = 150;
   private depthVariation: number = 50;
   private seed: number;
   private worldHeight: number;
+  private terrainSystem: TerrainSystem | null = null;
+  private waterFrequency: number = 0.6;
   
   /**
    * Create a new WaterZoneSystem
    * @param scene The Phaser scene
    * @param worldHeight The maximum world height
+   * @param terrainSystem Optional TerrainSystem for terrain collision checks
    * @param seed Optional seed for procedural generation
    */
-  constructor(scene: Phaser.Scene, worldHeight: number, seed?: number) {
+  constructor(scene: Phaser.Scene, worldHeight: number, terrainSystem?: TerrainSystem, seed?: number) {
     this.scene = scene;
     this.worldHeight = worldHeight;
     this.seed = seed || Math.random() * 10000;
+    this.terrainSystem = terrainSystem || null;
     
     // Create water zone textures
     this.createWaterTextures();
@@ -177,6 +182,13 @@ export default class WaterZoneSystem {
         continue;
       }
       
+      // Randomize water generation - only generate water in some chunks
+      // Always generate water in the starting area (chunk 0)
+      const shouldGenerateWater = chunkIndex === 0 || this.noise(chunkIndex, 99) < this.waterFrequency;
+      if (!shouldGenerateWater) {
+        continue;
+      }
+      
       // Generate a new water zone chunk
       const chunkX = chunkIndex * zoneChunkSize;
       this.generateWaterZoneChunk(chunkIndex, chunkX);
@@ -201,12 +213,12 @@ export default class WaterZoneSystem {
     let x = chunkX;
     let y: number;
     
-    // Configure zone based on type
+    // Configure zone based on type (reduced sizes)
     switch (zoneType) {
       case WaterZoneType.LAKE:
         // Lakes are wider but shallower
-        width = zoneChunkSize * (0.7 + this.noise(chunkIndex, 0) * 0.3);
-        height = this.defaultDepth * (0.8 + this.noise(chunkIndex, 1) * 0.2);
+        width = zoneChunkSize * (0.5 + this.noise(chunkIndex, 0) * 0.3);
+        height = this.defaultDepth * (0.7 + this.noise(chunkIndex, 1) * 0.2);
         // Position lakes near the bottom of the screen
         x = chunkX + (zoneChunkSize - width) / 2;
         y = this.worldHeight - height;
@@ -214,23 +226,23 @@ export default class WaterZoneSystem {
         
       case WaterZoneType.RIVER:
         // Rivers are narrower and have variable height
-        width = zoneChunkSize * (0.4 + this.noise(chunkIndex, 0) * 0.2);
-        height = this.worldHeight * (0.3 + this.noise(chunkIndex, 1) * 0.1);
+        width = zoneChunkSize * (0.3 + this.noise(chunkIndex, 0) * 0.2);
+        height = this.worldHeight * (0.25 + this.noise(chunkIndex, 1) * 0.1);
         x = chunkX + (zoneChunkSize - width) / 2;
         y = this.worldHeight - height;
         break;
         
       case WaterZoneType.OCEAN:
         // Oceans are wide and deep
-        width = zoneChunkSize;
-        height = this.defaultDepth * (1.2 + this.noise(chunkIndex, 1) * 0.3);
-        x = chunkX;
+        width = zoneChunkSize * 0.8;
+        height = this.defaultDepth * (1.0 + this.noise(chunkIndex, 1) * 0.3);
+        x = chunkX + (zoneChunkSize - width) / 2;
         y = this.worldHeight - height;
         break;
         
       default:
         // Default lake style
-        width = zoneChunkSize * 0.8;
+        width = zoneChunkSize * 0.6;
         height = this.defaultDepth;
         x = chunkX + (zoneChunkSize - width) / 2;
         y = this.worldHeight - height;
@@ -238,6 +250,11 @@ export default class WaterZoneSystem {
     
     // Create zone area
     const area = new Phaser.Geom.Rectangle(x, y, width, height);
+    
+    // If we have a terrain system, adjust water to avoid terrain
+    if (this.terrainSystem) {
+      this.adjustWaterForTerrain(area);
+    }
     
     // Create graphics for the zone
     const graphics = this.scene.add.graphics();
@@ -261,6 +278,47 @@ export default class WaterZoneSystem {
     this.activeZones.push(waterZone);
     
     console.log(`Generated ${zoneType} at ${x}, ${y} with size ${width}x${height}`);
+  }
+  
+  /**
+   * Adjust water rectangle to avoid overlap with terrain
+   * @param waterArea The water area rectangle to adjust
+   */
+  private adjustWaterForTerrain(waterArea: Phaser.Geom.Rectangle): void {
+    if (!this.terrainSystem) return;
+    
+    // Add a small margin to prevent water from touching terrain
+    const margin = 5;
+    
+    // Get the terrain group
+    const terrainGroup = this.terrainSystem.getTerrainGroup();
+    
+    // Check bottom of water area for terrain
+    let lowestY = waterArea.y;
+    
+    // Iterate through terrain blocks to find ones that would overlap with water
+    terrainGroup.getChildren().forEach((block) => {
+      const sprite = block as Phaser.Physics.Arcade.Sprite;
+      
+      // Check if block overlaps with water horizontally
+      if (
+        sprite.x + sprite.width/2 >= waterArea.x && 
+        sprite.x - sprite.width/2 <= waterArea.right
+      ) {
+        // Find the highest terrain point in this column
+        if (sprite.y - sprite.height/2 < lowestY) {
+          lowestY = sprite.y - sprite.height/2 - margin;
+        }
+      }
+    });
+    
+    // Adjust water height to avoid terrain
+    if (lowestY < waterArea.bottom) {
+      const newHeight = waterArea.bottom - lowestY;
+      if (newHeight > 30) { // Only if there's meaningful water left
+        waterArea.height = newHeight;
+      }
+    }
   }
   
   /**
@@ -320,14 +378,14 @@ export default class WaterZoneSystem {
     
     // Special case: make oceans more common at greater distances
     const distanceFromCenter = Math.abs(chunkIndex);
-    if (distanceFromCenter > 5 && noiseValue > 0.3) {
+    if (distanceFromCenter > 5 && noiseValue > 0.4) {
       return WaterZoneType.OCEAN;
     }
     
-    // Distribute zone types based on noise value
-    if (noiseValue < 0.3) {
+    // Distribute zone types based on noise value (modified distribution)
+    if (noiseValue < 0.4) {
       return WaterZoneType.LAKE;
-    } else if (noiseValue < 0.6) {
+    } else if (noiseValue < 0.7) {
       return WaterZoneType.RIVER;
     } else {
       return WaterZoneType.OCEAN;

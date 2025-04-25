@@ -52,7 +52,8 @@ export default class GameplayScene extends Phaser.Scene {
       this.terrainSystem = new TerrainSystem(this, this.scale.height);
       
       // Initialize water zone system (using the same seed as terrain for consistency)
-      this.waterZoneSystem = new WaterZoneSystem(this, this.scale.height);
+      // Pass terrainSystem to allow water to avoid terrain
+      this.waterZoneSystem = new WaterZoneSystem(this, this.scale.height, this.terrainSystem);
       
       // Create a temporary fallback water area for backward compatibility
       // This will be removed once all systems are updated to use WaterZoneSystem
