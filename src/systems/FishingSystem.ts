@@ -1,7 +1,6 @@
 import Phaser from 'phaser';
 import FishingRod from '../gameobjects/FishingRod';
 import FishingLine from '../gameobjects/FishingLine';
-import WaterZoneSystem, { FishPopulation, WaterZoneType } from './WaterZoneSystem';
 
 // Define fishing states
 enum FishingState {
@@ -20,7 +19,6 @@ export default class FishingSystem {
   private line: FishingLine;
   private state: FishingState = FishingState.IDLE;
   private waterArea: Phaser.Geom.Rectangle;
-  private waterZoneSystem: WaterZoneSystem | null = null; // Optional reference to water zone system
   private fishingTimer: Phaser.Time.TimerEvent | null = null;
   private castKey: Phaser.Input.Keyboard.Key;
   private reelKey: Phaser.Input.Keyboard.Key;
@@ -39,13 +37,12 @@ export default class FishingSystem {
   private maxCastDistance: number = 300; // Maximum cast distance
   private hookSettleTimer: Phaser.Time.TimerEvent | null = null; // Timer to check if hook has settled
   private lastHookPosition: Phaser.Math.Vector2 = new Phaser.Math.Vector2(0, 0); // Track the hook's last position
-  private hookMovementThreshold: number = 5; // How much the hook needs to move to be considered still moving
+  private hookMovementThreshold: number = 15; // Increased threshold for how much the hook needs to move to be considered still moving
   private autoRetractEnabled: boolean = true; // Whether auto-retraction is enabled
 
-  constructor(scene: Phaser.Scene, waterArea: Phaser.Geom.Rectangle, waterZoneSystem?: WaterZoneSystem) {
+  constructor(scene: Phaser.Scene, waterArea: Phaser.Geom.Rectangle) {
     this.scene = scene;
     this.waterArea = waterArea;
-    this.waterZoneSystem = waterZoneSystem || null;
     
     try {
       // Create fishing rod at default position
@@ -74,8 +71,10 @@ export default class FishingSystem {
       
       // Track mouse position
       scene.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
-        this.mousePosition.x = pointer.x;
-        this.mousePosition.y = pointer.y;
+        // Convert screen coordinates to world coordinates
+        const worldPoint = scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
+        this.mousePosition.x = worldPoint.x;
+        this.mousePosition.y = worldPoint.y;
       });
       
       // Create bite indicator sprite (initially hidden)
@@ -278,7 +277,7 @@ export default class FishingSystem {
       // Check if line is in water after casting
       if (this.state === FishingState.CASTING && this.line.getIsActive()) {
         try {
-          const inWater = this.isLineInWater();
+          const inWater = this.line.isInWater(this.waterArea);
           if (inWater) {
             this.splashSound?.play();
             this.startFishing();
@@ -310,7 +309,7 @@ export default class FishingSystem {
    */
   private calculateCastDirection(tipPosition: Phaser.Math.Vector2, isFacingRight: boolean): Phaser.Math.Vector2 {
     try {
-      // Direction from rod tip to mouse cursor
+      // Direction from rod tip to mouse cursor (already in world coordinates)
       const direction = new Phaser.Math.Vector2(
         this.mousePosition.x - tipPosition.x,
         this.mousePosition.y - tipPosition.y
@@ -404,6 +403,7 @@ export default class FishingSystem {
       console.log('Getting rod tip position');
       const tipPosition = this.rod.getTipPosition();
       console.log('Rod tip position:', tipPosition);
+      console.log('Mouse world position:', this.mousePosition.x, this.mousePosition.y);
       
       // Calculate cast direction based on mouse position
       const direction = this.calculateCastDirection(tipPosition, isFacingRight);
@@ -429,6 +429,7 @@ export default class FishingSystem {
       if (this.hookSettleTimer) {
         this.hookSettleTimer.remove();
         this.hookSettleTimer = null;
+        console.log('Cleared previous hook settle timer during new cast');
       }
       
       // Small delay to sync with the rod animation
@@ -606,7 +607,7 @@ export default class FishingSystem {
       console.log("Caught something!");
       
       // Determine what was caught based on location, depth, time, etc.
-      const caughtItem = this.determineCatch();
+      const caughtItem = this.determineCaughtItem();
       
       // Reset after a delay
       this.scene.time.delayedCall(1000, () => {
@@ -624,65 +625,31 @@ export default class FishingSystem {
   }
 
   /**
-   * Determine what the player caught based on the water type
+   * Determine what item was caught
    */
-  private determineCatch(): string {
-    // Check if we have the water zone system
-    if (this.waterZoneSystem) {
-      const hookPos = this.getHookPosition();
-      if (hookPos) {
-        // Get water type and fish population
-        const waterType = this.waterZoneSystem.getWaterTypeAt(hookPos.x, hookPos.y);
-        const fishPop = this.waterZoneSystem.getFishPopulationAt(hookPos.x, hookPos.y);
-        
-        if (fishPop) {
-          // Determine item type based on rarity
-          const random = Math.random();
-          
-          // 60% chance for common fish
-          if (random < 0.6 && fishPop.commonFish.length > 0) {
-            const index = Math.floor(Math.random() * fishPop.commonFish.length);
-            return fishPop.commonFish[index];
-          }
-          
-          // 25% chance for uncommon fish
-          if (random < 0.85 && fishPop.uncommonFish.length > 0) {
-            const index = Math.floor(Math.random() * fishPop.uncommonFish.length);
-            return fishPop.uncommonFish[index];
-          }
-          
-          // 10% chance for rare fish
-          if (random < 0.95 && fishPop.rareFish.length > 0) {
-            const index = Math.floor(Math.random() * fishPop.rareFish.length);
-            return fishPop.rareFish[index];
-          }
-          
-          // 5% chance for special items
-          if (fishPop.specialItems.length > 0) {
-            const index = Math.floor(Math.random() * fishPop.specialItems.length);
-            return fishPop.specialItems[index];
-          }
-          
-          // Fallback if no fish in this category
-          return 'common_fish';
+  private determineCaughtItem(): string {
+    try {
+      // Simple random distribution of items
+      const rand = Math.random();
+      
+      if (rand < 0.1) {
+        return "treasure"; // 10% chance for treasure
+      } else if (rand < 0.3) {
+        return "junk"; // 20% chance for junk
+      } else {
+        // 70% chance for fish, with different types
+        const fishRand = Math.random();
+        if (fishRand < 0.6) {
+          return "common_fish";
+        } else if (fishRand < 0.9) {
+          return "uncommon_fish";
+        } else {
+          return "rare_fish";
         }
       }
-    }
-    
-    // Fall back to legacy behavior if no water zone system or lookup failed
-    // Generate a random number to determine what was caught
-    const random = Math.random();
-    
-    if (random < 0.5) {
-      return 'common_fish';
-    } else if (random < 0.8) {
-      return 'uncommon_fish';
-    } else if (random < 0.95) {
-      return 'rare_fish';
-    } else if (random < 0.98) {
-      return 'treasure';
-    } else {
-      return 'junk';
+    } catch (error) {
+      console.error('Error determining caught item:', error);
+      return "common_fish"; // Fallback to common fish
     }
   }
 
@@ -748,92 +715,68 @@ export default class FishingSystem {
     // Get current hook position
     const currentHookPos = this.line.getEndPoint();
     
-    // If the hook has moved less than the threshold, consider it settled
-    const distance = Phaser.Math.Distance.Between(
+    // Get the hook physics body to check if it's touching terrain
+    const hook = this.line.getHook();
+    
+    // Calculate movement since last check to determine if hook is still moving significantly
+    const movementDistance = Phaser.Math.Distance.Between(
       this.lastHookPosition.x,
       this.lastHookPosition.y,
       currentHookPos.x,
       currentHookPos.y
     );
+
+    // Debug logging for hook status
+    if (this.state === FishingState.CASTING) {
+      console.log(`Hook status - touching down: ${hook?.body?.touching?.down}, velocity Y: ${hook?.body?.velocity?.y}, movement: ${movementDistance}`);
+    }
     
-    // If we haven't started the timer and the hook is moving slowly
-    if (!this.hookSettleTimer && distance < this.hookMovementThreshold) {
-      console.log('Hook appears to be settling, starting auto-retract timer');
-      
-      // Check if hook is in water (shouldn't be, but just in case)
-      const inWater = this.isLineInWater();
-      if (inWater) {
-        // If it's in water, don't auto-retract
-        return;
-      }
-      
-      // Start a timer to check if the hook stays settled
-      this.hookSettleTimer = this.scene.time.delayedCall(1000, () => {
-        // After timer expires, check again if hook is in water
-        const nowInWater = this.isLineInWater();
+    // Only consider the hook settled if it's actually touching terrain (not water) AND has minimal movement
+    if (hook && hook.body && hook.body.touching.down && movementDistance < this.hookMovementThreshold) {
+      // Hook is touching terrain - start auto-retract timer if not already started
+      if (!this.hookSettleTimer) {
+        console.log('Hook touched terrain and stopped moving, starting auto-retract timer');
         
-        // If hook is not in water, auto-retract the line
-        if (!nowInWater && this.autoRetractEnabled) {
-          console.log('Hook missed water and settled. Auto-retracting line.');
-          this.reset(); // Reset fishing to allow casting again
+        // Check if hook is in water (shouldn't be, but just in case)
+        const inWater = this.line.isInWater(this.waterArea);
+        if (inWater) {
+          // If it's in water, don't auto-retract
+          console.log("Hook is in water, won't auto-retract");
+          return;
         }
         
+        // Start a timer to give the player a moment before auto-retracting
+        this.hookSettleTimer = this.scene.time.delayedCall(1000, () => {
+          // After timer expires, check again if hook is in water
+          const nowInWater = this.line.isInWater(this.waterArea);
+          
+          // Double check the hook is still touching ground
+          if (!hook.body.touching.down) {
+            console.log("Hook is no longer touching ground, canceling auto-retract");
+            this.hookSettleTimer = null;
+            return;
+          }
+          
+          // If hook is not in water, auto-retract the line
+          if (!nowInWater && this.autoRetractEnabled) {
+            console.log('Hook touched non-water terrain. Auto-retracting line.');
+            this.reset(); // Reset fishing to allow casting again
+          }
+          
+          this.hookSettleTimer = null;
+        });
+      }
+    } else {
+      // If the hook was previously scheduled for retraction but is now moving or in air, cancel it
+      if (this.hookSettleTimer && (!hook.body.touching.down || movementDistance >= this.hookMovementThreshold)) {
+        console.log("Hook is moving again or in air, canceling auto-retract timer");
+        this.hookSettleTimer.remove();
         this.hookSettleTimer = null;
-      });
+      }
     }
     
     // Update the last hook position
     this.lastHookPosition.x = currentHookPos.x;
     this.lastHookPosition.y = currentHookPos.y;
-  }
-
-  /**
-   * Get the current hook position
-   * @returns The current hook position or null if not active
-   */
-  public getHookPosition(): Phaser.Math.Vector2 | null {
-    if (this.line && this.line.getIsActive()) {
-      return this.line.getEndPoint();
-    }
-    return null;
-  }
-
-  /**
-   * Check if line is in water
-   * Supports both legacy waterArea and the new WaterZoneSystem
-   */
-  private isLineInWater(): boolean {
-    const hookPos = this.getHookPosition();
-    if (!hookPos) return false;
-    
-    // First check with WaterZoneSystem if available
-    if (this.waterZoneSystem) {
-      return this.waterZoneSystem.isInWater(hookPos.x, hookPos.y);
-    }
-    
-    // Fall back to legacy waterArea check
-    return this.line.isInWater(this.waterArea);
-  }
-  
-  /**
-   * Get the water zone type at the hook position
-   * @returns The water zone type at the hook's position or null
-   */
-  private getWaterZoneTypeAtHook(): WaterZoneType | null {
-    const hookPos = this.getHookPosition();
-    if (!hookPos || !this.waterZoneSystem) return null;
-    
-    return this.waterZoneSystem.getWaterTypeAt(hookPos.x, hookPos.y);
-  }
-  
-  /**
-   * Get fish population at hook position
-   * @returns The fish population at the hook's position or null
-   */
-  private getFishPopulationAtHook(): FishPopulation | null {
-    const hookPos = this.getHookPosition();
-    if (!hookPos || !this.waterZoneSystem) return null;
-    
-    return this.waterZoneSystem.getFishPopulationAt(hookPos.x, hookPos.y);
   }
 } 

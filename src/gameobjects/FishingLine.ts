@@ -249,6 +249,13 @@ export default class FishingLine {
   }
 
   /**
+   * Get the hook object
+   */
+  public getHook(): Phaser.Physics.Arcade.Sprite {
+    return this.hook;
+  }
+
+  /**
    * Deactivate the line and clear its graphics
    */
   public reset(): void {

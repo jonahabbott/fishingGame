@@ -97,6 +97,17 @@ src/
   - Controls chunk boundaries and seamless transitions
   - Optimizes performance through dynamic loading
 
+### /src/systems/BackgroundSystem.ts
+- **Purpose:** Manages parallax backgrounds, day/night cycle, and ambient effects
+- **Responsibilities:**
+  - Renders multi-layered parallax scrolling backgrounds
+  - Controls day/night cycle with dynamic lighting and color transitions
+  - Manages ambient environmental elements like clouds and birds
+  - Handles foreground decorative elements for visual depth
+  - Synchronizes visual elements with camera movement
+  - Provides time-of-day information to other systems
+  - Optimizes rendering through efficient texture generation
+
 ## Core Game Systems
 
 ### Fishing System Architecture
@@ -207,6 +218,47 @@ The terrain generation system implements a modular design based on these compone
    - Efficient chunk refreshing when moving through the world
    - Recycling of terrain blocks when possible
    - Memory management through cleanup of unused chunks
+
+## Background System Architecture
+
+The background system provides visual atmosphere and environmental effects through these components:
+
+1. **Parallax Scrolling Layers:**
+   - Multiple depth-sorted background layers (mountains, hills, trees)
+   - Varying scroll speeds for sense of depth and distance
+   - Procedurally generated textures for visual variety
+   - Camera-synchronized movement with different parallax factors
+   - Fixed screen positioning with world-space movement
+
+2. **Day/Night Cycle:**
+   - Full day/night cycle with transitions between four distinct phases
+   - Dynamic sky color changes based on time of day
+   - Global lighting overlay with variable opacity
+   - Color interpolation system for smooth transitions
+   - Configurable cycle duration (default 5 minutes per cycle)
+   - Time controls for pausing, resuming, and manual time setting
+
+3. **Ambient Elements:**
+   - Cloud generation with variable sizes, speeds, and positions
+   - Bird animation with random flight patterns and directions
+   - Continuous movement with screen wrapping for infinite scrolling
+   - Depth-appropriate rendering order for proper layering
+   - Semi-transparent effects for atmospheric depth
+   - Subtle animation for natural movement
+
+4. **Decorative Elements:**
+   - Foreground decorative elements with partial parallax
+   - Tree tops and other nature elements to enhance environment
+   - Dynamic repositioning based on camera movement
+   - Procedurally varied appearance for natural look
+   - Efficient object reuse through element recycling
+
+5. **Performance Considerations:**
+   - Procedural texture generation at initialization to minimize assets
+   - Automatic screen wrapping to limit object count
+   - Camera-based element culling and repositioning
+   - Render depth management to ensure proper layering
+   - Efficient cleanup mechanisms for resource management
 
 ## Modular Architecture Principles
 

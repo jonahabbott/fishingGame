@@ -1,6 +1,16 @@
 import Phaser from 'phaser';
 
 /**
+ * Enum for terrain types used in terrain generation
+ */
+enum TerrainType {
+  GRASS = 'terrain_dirt', // Using terrain_dirt for grass areas
+  DIRT = 'terrain_sand',  // Using terrain_sand for dirt areas
+  STONE = 'terrain_rock', // Using terrain_rock for stone areas
+  WATER = 'water'         // Special type for water areas
+}
+
+/**
  * TerrainSystem
  * Responsible for procedural terrain generation, chunk loading, and management
  */
@@ -182,7 +192,20 @@ export default class TerrainSystem {
   }
 
   /**
-   * Create a column of terrain blocks at the specified position
+   * Generate terrain with improved water generation
+   * This creates more frequent water areas throughout the terrain
+   */
+  private generateTerrainWithWater(x: number, depth: number): TerrainType {
+    // Use a different noise seed for water generation to create variety
+    const waterNoise = this.noise(x * 0.02, depth * 0.03, this.seed + 1000);
+    const normalizedWaterNoise = (waterNoise + 1) / 2; // Convert to 0-1 range
+    
+    // Determine terrain type based on depth and noise
+    return this.getTerrainTypeAtDepth(depth, normalizedWaterNoise);
+  }
+
+  /**
+   * Create a column of terrain blocks with support for water areas
    * @param x The x-coordinate of the column
    * @param height The height of the column (in blocks)
    * @returns Array of created blocks
@@ -191,40 +214,58 @@ export default class TerrainSystem {
     const columnBlocks: Phaser.GameObjects.GameObject[] = [];
     const terrainY = this.worldHeight - this.tileSize / 2; // Ground level Y coordinate
     
+    // Keep track of whether we found any water in this column
+    let hasWater = false;
+    let waterDepth = -1;
+    
+    // First pass: identify water areas
+    for (let i = 0; i < height; i++) {
+      const terrainType = this.generateTerrainWithWater(x, i);
+      if (terrainType === TerrainType.WATER && !hasWater) {
+        hasWater = true;
+        waterDepth = i;
+      }
+    }
+    
+    // Second pass: create blocks with special handling for water areas
     for (let i = 0; i < height; i++) {
       const y = terrainY - i * this.tileSize;
-      const terrainType = this.getTerrainTypeForHeight(i, height);
+      let terrainType = this.generateTerrainWithWater(x, i);
       
-      // Create the terrain block
+      // If we have water in this column, ensure solid blocks beneath it
+      if (hasWater && i === waterDepth - 1) {
+        // Force a solid block right below water
+        terrainType = TerrainType.DIRT;
+      }
+      
+      // For water areas, create a visual water block (not part of collision)
+      if (terrainType === TerrainType.WATER) {
+        // Create a water visual block (not added to terrain group)
+        const waterVisual = this.scene.add.rectangle(
+          x, y, this.tileSize, this.tileSize, 
+          0x0099ff, 0.5 // Semi-transparent blue
+        );
+        waterVisual.setDepth(5); // Set to appear above terrain but below most other elements
+        
+        // If this is the bottom-most water block, ensure there's solid ground below
+        if (i === 0) {
+          // Create a solid ground block below the water
+          const solidGround = this.terrainGroup.create(x, y + this.tileSize, TerrainType.STONE);
+          solidGround.setOrigin(0.5, 0.5);
+          columnBlocks.push(solidGround);
+        }
+        
+        continue; // Skip adding this to terrain collision group
+      }
+      
+      // Create the regular terrain block
       const block = this.terrainGroup.create(x, y, terrainType);
       block.setOrigin(0.5, 0.5);
-      // Avoid refreshing individual bodies, we'll do a batch refresh
-      // block.refreshBody(); 
       
       columnBlocks.push(block);
     }
     
     return columnBlocks;
-  }
-
-  /**
-   * Determine the terrain type based on depth
-   * @param currentHeight The current height in the column (0 is top, higher is deeper)
-   * @param totalHeight The total height of the column
-   */
-  private getTerrainTypeForHeight(currentHeight: number, totalHeight: number): string {
-    // Surface block is different texture (grass/dirt)
-    if (currentHeight === totalHeight - 1) {
-      return 'terrain_dirt';
-    }
-    
-    // Sand near the surface
-    if (currentHeight >= totalHeight - 3) {
-      return 'terrain_sand';
-    }
-    
-    // Rock for deeper blocks
-    return 'terrain_rock';
   }
 
   /**
@@ -284,8 +325,39 @@ export default class TerrainSystem {
    * In a real game, you'd use a library like simplex-noise
    */
   private noise(x: number, y: number, seed: number): number {
-    // Simple 1D noise function for demonstration
-    // In a real implementation, use a proper noise library
-    return Math.sin(x + seed) * Math.cos(y + seed * 0.7);
+    // Enhanced noise function for better terrain variety
+    return Math.sin(x + seed) * Math.cos(y + seed * 0.7) + 
+           Math.sin(x * 0.5 + seed * 0.3) * Math.cos(y * 0.5 + seed * 0.2) * 0.5;
+  }
+
+  /**
+   * Generates a terrain type based on depth and noise values
+   * @param depth The depth level (y-position)
+   * @param noiseValue The noise value at this position
+   * @returns The terrain type for this position
+   */
+  private getTerrainTypeAtDepth(depth: number, noiseValue: number): TerrainType {
+    // Water generation is now more frequent with a higher threshold value
+    const waterThreshold = 0.65; // Increased from 0.8 to 0.65 to generate more water areas
+    
+    // Small lakes and ponds can appear at random based on noise
+    if (noiseValue > waterThreshold) {
+      // Increased probability of water generation
+      return TerrainType.WATER;
+    }
+    
+    // Now adjust other terrain type thresholds to account for more water
+    // Reduce the grass threshold to accommodate more water
+    if (depth < 2) {
+      return TerrainType.GRASS;
+    } else if (depth < 5) {
+      // Add small chance for shallow water pools even in dirt areas
+      return noiseValue > 0.75 ? TerrainType.WATER : TerrainType.DIRT;
+    } else if (depth < 10) {
+      // Small chance for underground springs
+      return noiseValue > 0.85 ? TerrainType.WATER : TerrainType.STONE;
+    } else {
+      return TerrainType.STONE;
+    }
   }
 } 

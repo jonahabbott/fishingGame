@@ -3,31 +3,33 @@ import Player from '../gameobjects/Player';
 import FishingSystem from '../systems/FishingSystem';
 import CaughtItem from '../gameobjects/CaughtItem';
 import TerrainSystem from '../systems/TerrainSystem';
-import WaterZoneSystem, { WaterZoneType } from '../systems/WaterZoneSystem';
+import BackgroundSystem from '../systems/BackgroundSystem';
 
 export default class GameplayScene extends Phaser.Scene {
   // Declare class properties for game objects
   private player!: Player;
-  // ground is no longer used since we have TerrainSystem
-  private terrainSystem!: TerrainSystem;
-  private waterZoneSystem!: WaterZoneSystem;
   private fishingSystem!: FishingSystem;
-  private waterArea!: Phaser.Geom.Rectangle; // Keep for backward compatibility during transition
+  private terrainSystem!: TerrainSystem;
+  private backgroundSystem!: BackgroundSystem;
+  private waterArea!: Phaser.Geom.Rectangle;
   private waterGraphics!: Phaser.GameObjects.Graphics;
-  private catchMessage!: Phaser.GameObjects.Text;
-  private catchCount: { [key: string]: number } = {
+  private catchText!: Phaser.GameObjects.Text;
+  private helpText!: Phaser.GameObjects.Text;
+  private counts: {
+    [key: string]: number
+  } = {
     common_fish: 0,
     uncommon_fish: 0,
     rare_fish: 0,
     treasure: 0,
     junk: 0
   };
-  private catchCountText!: Phaser.GameObjects.Text;
-  private helpText!: Phaser.GameObjects.Text;
-  private waterTypeText!: Phaser.GameObjects.Text;
+  private countTexts: {
+    [key: string]: Phaser.GameObjects.Text
+  } = {};
 
   constructor() {
-    super('GameplayScene');
+    super({ key: 'GameplayScene' });
   }
 
   preload(): void {
@@ -45,26 +47,31 @@ export default class GameplayScene extends Phaser.Scene {
       // Set gravity
       this.physics.world.gravity.y = 500;
 
+      // Initialize background system first (so it's behind everything)
+      this.backgroundSystem = new BackgroundSystem(this);
+      
       // Create terrain textures
       this.createTerrainTextures();
 
       // Initialize terrain system
       this.terrainSystem = new TerrainSystem(this, this.scale.height);
       
-      // Initialize water zone system (using the same seed as terrain for consistency)
-      // Pass terrainSystem to allow water to avoid terrain
-      this.waterZoneSystem = new WaterZoneSystem(this, this.scale.height, this.terrainSystem);
+      // Create the water area
+      this.createWaterArea();
       
-      // Create a temporary fallback water area for backward compatibility
-      // This will be removed once all systems are updated to use WaterZoneSystem
-      this.createFallbackWaterArea();
-      
+      // Verify water area was created
+      if (!this.waterArea) {
+        console.error('Water area is undefined after createWaterArea');
+        // Create a simple fallback water area
+        this.waterArea = new Phaser.Geom.Rectangle(0, 0, 100, 100);
+      }
+
       // Create the player
       this.player = new Player(this, 400, 300);
 
       // Initialize fishing system
       console.log('Initializing fishing system');
-      this.fishingSystem = new FishingSystem(this, this.waterArea, this.waterZoneSystem);
+      this.fishingSystem = new FishingSystem(this, this.waterArea);
       
       // Add terrain collision to the fishing line
       if (this.fishingSystem.getLine()) {
@@ -90,23 +97,14 @@ export default class GameplayScene extends Phaser.Scene {
       // Create help text
       this.createHelpText();
       
-      // Create water type display
-      this.createWaterTypeDisplay();
-      
       // Set camera bounds to allow horizontal scrolling
       this.cameras.main.setBounds(-10000, 0, 20000, this.scale.height);
       
       // Force initial terrain generation
       console.log('Generating initial terrain');
       this.terrainSystem.update(this.cameras.main.scrollX + this.scale.width / 2);
-      
-      // Force initial water zone generation
-      console.log('Generating initial water zones');
-      this.waterZoneSystem.update(this.cameras.main.scrollX + this.scale.width / 2);
-      
       // Additional call to ensure terrain is visible
       this.terrainSystem.update(this.cameras.main.scrollX);
-      
       // Explicitly refresh terrain
       this.terrainSystem.refreshTerrain();
       
@@ -116,267 +114,228 @@ export default class GameplayScene extends Phaser.Scene {
     }
   }
 
-  update(time: number, delta: number): void {
+  update(): void {
     try {
       // Update player
       this.player.update();
       
-      // Update fishing system
+      // Get player position
       const playerSprite = this.player.getSprite();
+      
+      // Update fishing system
       this.fishingSystem.update(
         playerSprite.x, 
         playerSprite.y, 
         this.player.isFacingRight(),
-        delta
+        this.game.loop.delta
       );
       
       // Update terrain based on camera position
-      // Use the center of the camera view for terrain updates
-      const cameraCenterX = this.cameras.main.scrollX + this.scale.width / 2;
-      this.terrainSystem.update(cameraCenterX);
+      const cameraX = this.cameras.main.scrollX + this.scale.width / 2;
+      this.terrainSystem.update(cameraX);
       
-      // Update water zones based on camera position
-      this.waterZoneSystem.update(cameraCenterX);
+      // Update background system with camera position
+      this.backgroundSystem.update(cameraX);
       
-      // Update water type display
-      this.updateWaterTypeDisplay();
     } catch (error) {
       console.error('Error in GameplayScene update:', error);
     }
   }
 
   /**
-   * Handle a caught item
+   * Create help text with controls
    */
-  private handleCaughtItem(itemType: string): void {
+  private createHelpText(): void {
     try {
-      // Create a floating item at the hook position
-      const hookPos = this.fishingSystem.getHookPosition();
-      if (hookPos) {
-        new CaughtItem(this, hookPos.x, hookPos.y - 20, itemType);
-      }
-      
-      // Update catch count
-      if (this.catchCount.hasOwnProperty(itemType)) {
-        this.catchCount[itemType]++;
-      } else {
-        // If it's a new type from the water zone system, categorize it
-        if (itemType.includes('treasure') || itemType.includes('artifact')) {
-          this.catchCount.treasure++;
-        } else if (itemType.includes('can') || itemType.includes('driftwood')) {
-          this.catchCount.junk++;
-        } else {
-          // Check if it's a rare fish
-          const hookPos = this.fishingSystem.getHookPosition();
-          if (hookPos) {
-            const waterType = this.waterZoneSystem.getWaterTypeAt(hookPos.x, hookPos.y);
-            const fishPop = this.waterZoneSystem.getFishPopulationAt(hookPos.x, hookPos.y);
-            
-            if (fishPop) {
-              if (fishPop.rareFish.includes(itemType)) {
-                this.catchCount.rare_fish++;
-              } else if (fishPop.uncommonFish.includes(itemType)) {
-                this.catchCount.uncommon_fish++;
-              } else {
-                this.catchCount.common_fish++;
-              }
-            } else {
-              // Fallback to common fish if no population data
-              this.catchCount.common_fish++;
-            }
-          }
+      // Create text explaining controls
+      this.helpText = this.add.text(
+        this.scale.width / 2,
+        this.scale.height - 70,
+        'Controls: Arrow Keys/WASD to move, Right-Click or F to cast - mouse distance directly controls casting distance, Right-Click or R to reel when bite occurs',
+        {
+          fontFamily: 'Arial',
+          fontSize: '12px',
+          color: '#FFFFFF',
+          stroke: '#000000',
+          strokeThickness: 2,
+          align: 'center'
         }
-      }
+      );
+      this.helpText.setOrigin(0.5, 0.5);
+      this.helpText.setDepth(100);
       
-      // Update catch display
-      this.updateCatchDisplay(itemType);
+      console.log('Help text created');
     } catch (error) {
-      console.error('Error handling caught item:', error);
+      console.error('Error creating help text:', error);
     }
   }
 
   /**
-   * Create UI for catch messages
+   * Create UI elements for showing caught items
    */
   private createCatchUI(): void {
     try {
-      // Create catch message text
-      this.catchMessage = this.add.text(
+      // Create text for catch messages (initially empty)
+      this.catchText = this.add.text(
         this.scale.width / 2, 
-        100,
-        '',
+        100, 
+        '', 
         { 
+          fontFamily: 'Arial', 
           fontSize: '24px', 
-          color: '#ffffff',
+          color: '#FFFFFF',
           stroke: '#000000',
           strokeThickness: 4,
           align: 'center'
         }
       );
-      this.catchMessage.setOrigin(0.5, 0.5);
-      this.catchMessage.setScrollFactor(0); // Fix to camera
+      this.catchText.setOrigin(0.5, 0.5);
+      this.catchText.setDepth(100);
       
-      // Create catch count display
-      this.catchCountText = this.add.text(
-        10, 
-        10, 
-        this.formatCatchCount(),
-        { 
-          fontSize: '16px', 
-          color: '#ffffff',
-          stroke: '#000000',
-          strokeThickness: 2
-        }
-      );
-      this.catchCountText.setScrollFactor(0); // Fix to camera
+      // Create catch count display in top-left corner
+      this.updateCatchCountText();
+      
+      console.log('Catch UI created');
     } catch (error) {
       console.error('Error creating catch UI:', error);
     }
   }
 
   /**
-   * Format the catch count for display
+   * Update the catch count display
    */
-  private formatCatchCount(): string {
-    return `Caught Items:
-Common Fish: ${this.catchCount.common_fish}
-Uncommon Fish: ${this.catchCount.uncommon_fish}
-Rare Fish: ${this.catchCount.rare_fish}
-Treasure: ${this.catchCount.treasure}
-Junk: ${this.catchCount.junk}`;
+  private updateCatchCountText(): void {
+    try {
+      // Remove existing text if it exists
+      if (this.countTexts.common_fish) {
+        this.countTexts.common_fish.destroy();
+      }
+      
+      // Create text showing current catch counts
+      let catchText = 'Catches:\n';
+      
+      if (this.counts.common_fish > 0) {
+        catchText += `Common Fish: ${this.counts.common_fish}\n`;
+      }
+      
+      if (this.counts.uncommon_fish > 0) {
+        catchText += `Uncommon Fish: ${this.counts.uncommon_fish}\n`;
+      }
+      
+      if (this.counts.rare_fish > 0) {
+        catchText += `Rare Fish: ${this.counts.rare_fish}\n`;
+      }
+      
+      if (this.counts.treasure > 0) {
+        catchText += `Treasure: ${this.counts.treasure}\n`;
+      }
+      
+      if (this.counts.junk > 0) {
+        catchText += `Junk: ${this.counts.junk}\n`;
+      }
+      
+      this.countTexts.common_fish = this.add.text(
+        20, 
+        20, 
+        catchText, 
+        { 
+          fontFamily: 'Arial', 
+          fontSize: '16px', 
+          color: '#FFFFFF',
+          stroke: '#000000',
+          strokeThickness: 3
+        }
+      );
+      this.countTexts.common_fish.setDepth(100);
+      
+      console.log('Catch count text updated');
+    } catch (error) {
+      console.error('Error updating catch count text:', error);
+    }
   }
 
   /**
-   * Update the catch display with a new item
+   * Handle caught item
    */
-  private updateCatchDisplay(itemType: string): void {
+  private handleCaughtItem(itemType: string): void {
     try {
-      // Update catch count text
-      this.catchCountText.setText(this.formatCatchCount());
-      
-      // Show catch message
-      let message = '';
-      
-      // Check if it's a special item from water zone system
-      if (itemType.includes('treasure') || itemType.includes('artifact')) {
-        message = `You found ${itemType.replace('_', ' ')}!`;
-      } else if (itemType.includes('can') || itemType.includes('driftwood')) {
-        message = `You caught some ${itemType.replace('_', ' ')}!`;
-      } else {
-        // Format fish name nicely
-        const fishName = itemType.replace(/_/g, ' ');
-        message = `You caught a ${fishName}!`;
+      // Increment counter for this item type
+      if (itemType in this.counts) {
+        this.counts[itemType]++;
       }
       
-      this.catchMessage.setText(message);
+      // Update catch count display
+      this.updateCatchCountText();
+      
+      // Get descriptive text based on item type
+      const itemText = this.getItemDisplayText(itemType);
+      
+      // Display catch message
+      this.catchText.setText(itemText);
       
       // Animate the message
-      this.catchMessage.setAlpha(1);
+      this.tweens.killTweensOf(this.catchText);
+      this.catchText.setAlpha(1);
+      this.catchText.setScale(0.5);
+      
       this.tweens.add({
-        targets: this.catchMessage,
-        y: 80,
-        alpha: 0,
-        duration: 2000,
-        ease: 'Power2',
-        onComplete: () => {
-          this.catchMessage.y = 100;
-        }
+        targets: this.catchText,
+        scale: 1,
+        duration: 300,
+        ease: 'Back.easeOut'
       });
+      
+      // Fade out after a delay
+      this.tweens.add({
+        targets: this.catchText,
+        alpha: 0,
+        delay: 2000,
+        duration: 500
+      });
+      
+      // Show the item sprite floating up from the water
+      this.showCaughtItemAnimation(itemType);
+      
+      console.log(`Handled caught item: ${itemType}`);
     } catch (error) {
-      console.error('Error updating catch display:', error);
+      console.error('Error handling caught item:', error);
     }
   }
 
   /**
-   * Create help text
+   * Show an animation of the caught item
    */
-  private createHelpText(): void {
+  private showCaughtItemAnimation(itemType: string): void {
     try {
-      this.helpText = this.add.text(
-        this.scale.width - 10, 
-        10,
-        'Controls:\nArrows/WASD: Move\nF/Right-click: Cast\nR/Right-click: Reel',
-        { 
-          fontSize: '14px', 
-          color: '#ffffff',
-          stroke: '#000000',
-          strokeThickness: 2,
-          align: 'right'
-        }
-      );
-      this.helpText.setOrigin(1, 0); // Align to top-right
-      this.helpText.setScrollFactor(0); // Fix to camera
-    } catch (error) {
-      console.error('Error creating help text:', error);
-    }
-  }
-  
-  /**
-   * Create water type display text
-   */
-  private createWaterTypeDisplay(): void {
-    try {
-      this.waterTypeText = this.add.text(
-        this.scale.width - 10,
-        70,
-        'Water: None',
-        {
-          fontSize: '14px',
-          color: '#ffffff',
-          stroke: '#000000',
-          strokeThickness: 2,
-          align: 'right'
-        }
-      );
-      this.waterTypeText.setOrigin(1, 0); // Align to top-right
-      this.waterTypeText.setScrollFactor(0); // Fix to camera
-    } catch (error) {
-      console.error('Error creating water type display:', error);
-    }
-  }
-  
-  /**
-   * Update water type display based on hook position
-   */
-  private updateWaterTypeDisplay(): void {
-    try {
-      // Get hook position
-      const hookPos = this.fishingSystem.getHookPosition();
+      // Get the end point of the fishing line (hook position)
+      const hookPos = this.fishingSystem.getLine().getEndPoint();
       
-      if (hookPos) {
-        // Check if hook is in water
-        const waterType = this.waterZoneSystem.getWaterTypeAt(hookPos.x, hookPos.y);
-        
-        if (waterType) {
-          // Format water type name (e.g., LAKE -> Lake)
-          const formattedType = waterType.charAt(0) + waterType.slice(1).toLowerCase();
-          this.waterTypeText.setText(`Water: ${formattedType}`);
-          
-          // Set color based on water type
-          let color: string;
-          switch (waterType) {
-            case WaterZoneType.LAKE:
-              color = '#3399ff';
-              break;
-            case WaterZoneType.RIVER:
-              color = '#66ccff';
-              break;
-            case WaterZoneType.OCEAN:
-              color = '#0066cc';
-              break;
-            default:
-              color = '#ffffff';
-          }
-          
-          this.waterTypeText.setColor(color);
-        } else {
-          // Not in water
-          this.waterTypeText.setText('Water: None');
-          this.waterTypeText.setColor('#ffffff');
-        }
-      }
+      // Create a floating item animation at the hook position
+      new CaughtItem(this, hookPos.x, hookPos.y, itemType);
+      
+      console.log(`Created ${itemType} animation at (${hookPos.x}, ${hookPos.y})`);
     } catch (error) {
-      console.error('Error updating water type display:', error);
+      console.error('Error showing caught item animation:', error);
+    }
+  }
+
+  /**
+   * Get display text for a caught item
+   */
+  private getItemDisplayText(itemType: string): string {
+    switch (itemType) {
+      case 'common_fish':
+        return 'Caught a Common Fish!';
+      case 'uncommon_fish':
+        return 'Caught an Uncommon Fish!';
+      case 'rare_fish':
+        return 'Caught a Rare Fish!\nWhat a catch!';
+      case 'treasure':
+        return 'Found a Treasure!\nLucky!';
+      case 'junk':
+        return 'Just some junk...';
+      default:
+        return 'Caught something!';
     }
   }
 
@@ -516,23 +475,15 @@ Junk: ${this.catchCount.junk}`;
     }
   }
   
-  /**
-   * Create temporary fallback water area for backward compatibility
-   * This will be removed once all systems are updated to use WaterZoneSystem
-   */
-  private createFallbackWaterArea(): void {
+  private createWaterArea(): void {
     try {
-      // Create a simple rectangle for backward compatibility
-      const groundHeight = 32; // Height of the ground tiles
-      const waterWidth = this.scale.width / 2;
-      const waterHeight = 180;
-      const waterX = this.scale.width - waterWidth;
-      const waterY = this.scale.height - groundHeight - waterHeight / 2;
+      // Create multiple water areas across the screen
+      this.createMainWaterArea();
+      this.createAdditionalWaterAreas();
       
-      this.waterArea = new Phaser.Geom.Rectangle(waterX, waterY, waterWidth, waterHeight);
-      console.log('Created fallback water area for backward compatibility');
+      console.log('All water areas created successfully');
     } catch (error) {
-      console.error('Error creating fallback water area:', error);
+      console.error('Error creating water areas:', error);
       // Create a fallback water area if there's an error
       this.waterArea = new Phaser.Geom.Rectangle(
         this.scale.width - 200, 
@@ -541,5 +492,131 @@ Junk: ${this.catchCount.junk}`;
         100
       );
     }
+  }
+
+  /**
+   * Create the main water area (large body of water on the right)
+   */
+  private createMainWaterArea(): void {
+    // Create main water area on the right side of the screen
+    const groundHeight = 32; // Height of the ground tiles
+    const waterWidth = this.scale.width / 2; // Increased from 1/3 to 1/2 for more fishing area
+    const waterHeight = 180; // Increased from 150 to 180 for deeper water
+    const waterX = this.scale.width - waterWidth;
+    const waterY = this.scale.height - groundHeight - waterHeight / 2;
+    
+    console.log(`Creating main water area at (${waterX}, ${waterY}) with dimensions ${waterWidth}x${waterHeight}`);
+    
+    // Define the water rectangle for collision detection - ensure proper initialization
+    this.waterArea = new Phaser.Geom.Rectangle(waterX, waterY, waterWidth, waterHeight);
+    
+    // Draw water area for visual representation
+    this.waterGraphics = this.add.graphics();
+    
+    // Add a layered effect to the water
+    // Deep water background
+    this.waterGraphics.fillStyle(0x0077cc, 0.7); // Deeper blue
+    this.waterGraphics.fillRect(waterX, waterY, waterWidth, waterHeight);
+    
+    // Middle layer of water
+    this.waterGraphics.fillStyle(0x0099ff, 0.6); // Standard blue water
+    this.waterGraphics.fillRect(waterX, waterY, waterWidth, waterHeight - 30);
+    
+    // Surface water with slight transparency
+    this.waterGraphics.fillStyle(0x66ccff, 0.5); // Lighter blue for surface
+    this.waterGraphics.fillRect(waterX, waterY, waterWidth, waterHeight - 60);
+    
+    // Add a darker bottom border to visually indicate the lake floor
+    this.waterGraphics.fillStyle(0x005c99, 0.8); // Dark blue for lake bottom
+    this.waterGraphics.fillRect(waterX, waterY + waterHeight - 15, waterWidth, 15);
+    
+    // Add simple wave animation to make it look like water
+    this.tweens.add({
+      targets: this.waterGraphics,
+      alpha: 0.7,
+      yoyo: true,
+      repeat: -1,
+      duration: 1500,
+      ease: 'Sine.easeInOut'
+    });
+  }
+
+  /**
+   * Create additional smaller water areas throughout the world
+   */
+  private createAdditionalWaterAreas(): void {
+    const groundHeight = 32; // Height of the ground tiles
+    const smallWaterGraphics = this.add.graphics();
+    smallWaterGraphics.fillStyle(0x0099ff, 0.6); // Semi-transparent blue
+    
+    // Create several small ponds/lakes at regular intervals
+    // We'll create water areas to the left and right of the main area
+    const pondCount = 6; // Number of additional ponds to create
+    const pondWidth = 120; // Width of each pond
+    const pondHeight = 100; // Height of each pond
+    const spacing = 400; // Space between ponds
+    
+    for (let i = 0; i < pondCount; i++) {
+      // Alternate between left and right sides of the world
+      const direction = i % 2 === 0 ? -1 : 1;
+      const distance = (i + 1) * spacing;
+      
+      // Calculate position
+      // For the left side, we go left from the center of the screen
+      // For the right side, we go right from the right edge of the screen
+      const pondX = direction === -1 
+        ? (this.scale.width / 2) - distance 
+        : (this.scale.width + distance);
+      
+      const pondY = this.scale.height - groundHeight - pondHeight / 2;
+      
+      // Create the pond
+      smallWaterGraphics.fillRect(pondX, pondY, pondWidth, pondHeight);
+      
+      // Add a darker bottom border to visually indicate the pond floor
+      smallWaterGraphics.fillStyle(0x007acc, 0.8); // Darker blue for pond bottom
+      smallWaterGraphics.fillRect(pondX, pondY + pondHeight - 8, pondWidth, 8);
+      
+      // Reset fill style for next pond
+      smallWaterGraphics.fillStyle(0x0099ff, 0.6);
+      
+      // Add this area to the main water area as a union
+      // This way the fishing system will detect the hook in any water area
+      const pondRect = new Phaser.Geom.Rectangle(pondX, pondY, pondWidth, pondHeight);
+      
+      // For the first additional pond, we need to create a new waterArea that combines the main one
+      // For subsequent ponds, we just add to the existing union
+      if (i === 0) {
+        // Create a copy of the main water area
+        const mainAreaCopy = new Phaser.Geom.Rectangle(
+          this.waterArea.x,
+          this.waterArea.y,
+          this.waterArea.width,
+          this.waterArea.height
+        );
+        
+        // Create a union rect that includes both the main area and this pond
+        // We can't directly union the rectangles in Phaser, so we create a larger containing rectangle
+        const unionRect = Phaser.Geom.Rectangle.Union(mainAreaCopy, pondRect);
+        
+        // Replace the main water area with this union
+        this.waterArea = unionRect;
+      } else {
+        // For subsequent ponds, just expand the existing union rectangle to contain this new pond
+        Phaser.Geom.Rectangle.Union(this.waterArea, pondRect, this.waterArea);
+      }
+      
+      console.log(`Created additional water pond at (${pondX}, ${pondY})`);
+    }
+    
+    // Add wave animation to the additional ponds
+    this.tweens.add({
+      targets: smallWaterGraphics,
+      alpha: 0.7,
+      yoyo: true,
+      repeat: -1,
+      duration: 1500,
+      ease: 'Sine.easeInOut'
+    });
   }
 } 
