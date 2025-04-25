@@ -1,0 +1,17 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+title: Modular Architecture
+type: always
+---
+
+# Modular Architecture Principle
+
+- **Mandate:** Avoid monolithic files. Break down game systems and features into separate, well-defined modules (TypeScript files/classes).
+- **Structure:** Organize code logically based on functionality (e.g., `player`, `fishing`, `ui`, `world`, `utils`).
+- **Scenes:** Use Phaser Scenes (`Phaser.Scene`) as the primary organizational unit for gameplay logic, but delegate complex systems to dedicated modules/classes imported into the scenes.
+- **Goal:** Improve code maintainability, reusability, and testability. Reduce complexity within individual files.
+- **Refer:** [Implemation-plan.md](mdc:memory-bank/Implemation-plan.md) for initial structure examples.

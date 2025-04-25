@@ -1,0 +1,17 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+title: Core Game Concept
+type: always
+---
+
+# Core Game Concept
+
+- **Game:** Hook & Havoc
+- **Genre:** 2D Fishing Adventure Sandbox
+- **Platform:** Web Browser (using Vite, Phaser 3, TypeScript)
+- **Core Idea:** Explore a procedurally generated watery world where the fishing rod is the primary tool for gathering, combat, and interaction. Blend elements of Terraria/Stardew Valley with a fishing focus.
+- **Refer:** [game-design-document.md](mdc:memory-bank/game-design-document.md) for full details.
